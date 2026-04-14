@@ -23,7 +23,6 @@ from gemma.gm.nn.gemma4._layers import RMSNorm
 from gemma.gm.nn.gemma4.vision import _norms
 import jax
 import jax.numpy as jnp
-from kauldron import kd
 
 K_MASK = -2.3819763e38  # Set to a large negative number.
 DEFAULT_ROPE_BASE_FREQUENCY = 10_000
@@ -143,7 +142,6 @@ class Attention(nn.Module):
     self.query_norm = _norms.RMSNorm()
     self.key_norm = _norms.RMSNorm()
     self.value_norm = RMSNorm(with_scale=False)
-    self.attention_weights = kd.nn.Identity()
 
   def __call__(
       self,

@@ -20,8 +20,6 @@ from gemma.gm.math import _positional_embeddings
 from gemma.gm.nn.gemma4 import _layers
 import jax
 import jax.numpy as jnp
-from kauldron import kd
-from kauldron.ktyping import Bool, Float, Int, typechecked  # pylint: disable=g-multiple-import,g-importing-member
 
 K_MASK = -2.3819763e38  # Set to a large negative number.
 DEFAULT_ROPE_BASE_FREQUENCY = 10_000
@@ -36,11 +34,11 @@ LayerCache = dict[str, jax.Array]
 
 
 def _create_sliding_mask(
-    positions: Int['B L'],
+    positions: jax.Array,
     *,
-    cache_positions: Int['B cache_len'] | None = None,
+    cache_positions: jax.Array | None = None,
     sliding_window_size: int,
-) -> Bool['B L cache_len']:
+) -> jax.Array:
   """Create the sliding mask for local sliding attention."""
   if cache_positions is None:
     cache_positions = positions
@@ -136,8 +134,7 @@ class Embedder(nn.Module):
     """
     return jnp.dot(x, self.input_embedding_table.T)
 
-  @typechecked
-  def encode_logits(self, x: Float['*B L V']) -> Float['*B L D']:
+  def encode_logits(self, x: jax.Array) -> jax.Array:
     """Encodes the input logits.
 
     Converts the logits to probabilities and uses that as a weighted sum of the
@@ -228,8 +225,6 @@ class Attention(nn.Module):
     self.key_norm = _layers.RMSNorm(with_scale=self.qk_norm_with_scale)
     self.value_norm = _layers.RMSNorm(with_scale=False)
 
-    self.attention_weights = kd.nn.Identity()
-
   def __call__(
       self,
       x: jax.Array,
@@ -237,7 +232,7 @@ class Attention(nn.Module):
       cache: LayerCache | None,
       attn_mask: jax.Array,
       kv_shared_cache: LayerCache | None = None,
-  ) -> tuple[LayerCache | None, jax.Array]:
+  ) -> tuple[LayerCache | None, jax.Array, jax.Array]:
     """Applies multi-head attention to the inputs.
 
     Args:
@@ -250,6 +245,8 @@ class Attention(nn.Module):
     Returns:
       cache: Updated attention KV cache.
       outputs: Output sequence of shape [batch_size, seq_len, embed_dim].
+      cls_attn_row: Attention probs for the last (CLS) query position,
+        averaged over heads. Shape [batch_size, cache_size].
     """
     query_proj = self.q_einsum('BTD,NDH->BTNH', x)
     query_proj = self.query_norm(query_proj)
@@ -345,7 +342,8 @@ class Attention(nn.Module):
     # Multi-head attention matrices.
     # [batch_size, seq_len, num_heads, cache_size]
     probs = jax.nn.softmax(padded_logits, axis=-1).astype(key_proj.dtype)
-    probs = self.attention_weights(probs)
+    # CLS is the last query position; average over heads -> [batch_size, cache_size].
+    cls_attn_row = probs[:, -1, :, :].mean(axis=1)
 
     if self.use_gqa:
       # Reshape matrices to enable einsums over groups.
@@ -383,7 +381,7 @@ class Attention(nn.Module):
       # [batch_size, cache_size]
       new_cache['positions'] = cache_positions
 
-    return new_cache, attn_output
+    return new_cache, attn_output, cls_attn_row
 
   @classmethod
   def init_cache(
@@ -587,7 +585,7 @@ class Block(nn.Module):
       attn_mask: jax.Array,
       per_layer_input: jax.Array | None = None,
       kv_shared_cache: LayerCache | None = None,
-  ) -> tuple[LayerCache | None, jax.Array]:
+  ) -> tuple[LayerCache | None, jax.Array, jax.Array]:
     """Applies the block to the inputs.
 
     Args:
@@ -602,11 +600,13 @@ class Block(nn.Module):
     Returns:
       cache: Updated attention KV cache.
       outputs: Output sequence of shape [batch_size, seq_len, embed_dim].
+      cls_attn_row: CLS attention row from the attention sub-module. Shape
+        [batch_size, cache_size].
     """
     # 1. Attention
     inputs_normalized = self.pre_attention_norm(x)
 
-    cache, attn_output = self.attn(
+    cache, attn_output, cls_attn_row = self.attn(
         inputs_normalized,
         segment_pos,
         cache,
@@ -647,7 +647,7 @@ class Block(nn.Module):
     # 4. Scale
     outputs = outputs * self.skip_scale
 
-    return cache, outputs
+    return cache, outputs, cls_attn_row
 
   def _forward_dense(self, attn_output: jax.Array) -> jax.Array:
     """Standard FFW forward pass."""

@@ -17,13 +17,14 @@
 from collections.abc import Sequence
 import dataclasses
 import functools
+from typing import TYPE_CHECKING
 
 from gemma.gm.nn.gemma4 import _modules
-from gemma.gm.nn.gemma4.audio import _modules as gemma4_audio
 from gemma.gm.nn.gemma4.vision import _encoder as gemma4_vision
-from gemma.gm.text import _tokenizer
-from gemma.gm.utils import _types
 import jax.numpy as jnp
+
+if TYPE_CHECKING:
+  from gemma.gm.nn.gemma4.audio import _modules as gemma4_audio
 
 
 Cache = dict[str, _modules.LayerCache]
@@ -115,7 +116,7 @@ class TransformerConfig:
   kv_cache_sharing_config: KVCacheSharingConfig | None = None
   override_kv_shared_ffw_hidden: int | None = None
   vision_encoder: gemma4_vision.VisionEncoder | None = None
-  audio_encoder: gemma4_audio.ConformerConfig | None = None
+  audio_encoder: 'gemma4_audio.ConformerConfig | None' = None
 
   # MoE configuration
   enable_moe: bool = False
@@ -135,10 +136,13 @@ class TransformerConfig:
     return len(self.attention_types)
 
   @functools.cached_property
-  def input_config(self) -> _types.InputConfig:
+  def input_config(self) -> '_types.InputConfig':
     """Returns the input config for the transformer."""
     # TODO(epot): Have the tokenizer version be part of the config
     # instead.
+    from gemma.gm.text import _tokenizer
+    from gemma.gm.utils import _types
+
     special_tokens = _tokenizer.Gemma3Tokenizer.special_tokens
 
     if self.vision_encoder is not None:

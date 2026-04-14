@@ -22,7 +22,6 @@ from gemma.gm.nn.gemma4.vision import _images
 from gemma.gm.nn.gemma4.vision import _utils
 import jax
 import jax.numpy as jnp
-from kauldron.ktyping import Bool, Float, Int, typechecked  # pylint: disable=g-multiple-import,g-importing-member
 
 POSITIONS_PAD_VALUE = -1
 
@@ -59,12 +58,11 @@ class VisionEntry(nn.Module):
         jnp.float32,
     )
 
-  @typechecked
   def __call__(
       self,
-      images_or_patches: Float['B H W C'] | Float['B L P'],
-      positions_xy: Int['B L 2'] | None = None,
-  ) -> Float['B L D']:
+      images_or_patches: jax.Array,
+      positions_xy: jax.Array | None = None,
+  ) -> jax.Array:
 
     if images_or_patches.ndim == 4:
       # Patchify inputs. Assume constant aspect ratio.
@@ -104,14 +102,13 @@ class VisionExit(nn.Module):
   output_length: int | tuple[int, ...] = 256
   param_dtype: jnp.dtype = jnp.float32
 
-  @typechecked
   def _maybe_downsample(
       self,
-      x: Float['B L D'],
+      x: jax.Array,
       *,
-      positions_xy: Int['B L 2'] | None = None,
+      positions_xy: jax.Array | None = None,
       length: int,
-  ) -> tuple[Float['B l D'], Bool['B l'] | None]:
+  ) -> tuple[jax.Array, jax.Array | None]:
     cur_length = x.shape[1]
     if cur_length == length:
       if positions_xy is None:
@@ -155,14 +152,13 @@ class VisionExit(nn.Module):
     mask = jnp.ones(x_pooled.shape[:-1], dtype=jnp.bool_)
     return x_pooled, mask
 
-  @typechecked
   def _single_call(
       self,
-      x: Float['B L D'],
+      x: jax.Array,
       *,
-      positions_xy: Int['B L 2'] | None = None,
+      positions_xy: jax.Array | None = None,
       length: int,
-  ) -> tuple[Float['B l D'], Bool['B l'] | None]:
+  ) -> tuple[jax.Array, jax.Array | None]:
     """Apply vision exit processing for a single output length."""
     x, mask = self._maybe_downsample(
         x, positions_xy=positions_xy, length=length
@@ -172,14 +168,13 @@ class VisionExit(nn.Module):
 
     return x, mask
 
-  @typechecked
   def __call__(
       self,
-      x: Float['B L D'],
+      x: jax.Array,
       *,
-      positions_xy: Int['B L 2'] | None = None,
+      positions_xy: jax.Array | None = None,
       output_length_overrides: tuple[int, ...] | None = None,
-  ) -> tuple[tuple[Float['B l D'], Bool['B l'] | None], ...]:
+  ) -> tuple[tuple[jax.Array, jax.Array | None], ...]:
     """Apply vision exit processing.
 
     Args:

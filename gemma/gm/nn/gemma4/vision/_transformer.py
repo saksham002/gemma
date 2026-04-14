@@ -16,7 +16,7 @@
 
 from flax import linen as nn
 from gemma.gm.nn.gemma4.vision import _modules
-from kauldron.ktyping import Bool, Float, Int, typechecked  # pylint: disable=g-multiple-import,g-importing-member
+import jax
 
 
 class VisionBlock(nn.Module):
@@ -42,13 +42,12 @@ class VisionBlock(nn.Module):
         use_clipped_linears=self.use_clipped_linears,
     )
 
-  @typechecked
   def __call__(
       self,
-      inputs: Float['B L D'],
-      attn_mask: Bool['B #L l'] | None,
-      positions: Int['B L'] | Int['B L 2'],
-  ) -> tuple[Float['B L D'], None]:
+      inputs: jax.Array,
+      attn_mask: jax.Array | None,
+      positions: jax.Array,
+  ) -> tuple[jax.Array, None]:
     """Calls the block."""
     outputs = self.block(
         inputs=inputs, attn_mask=attn_mask, positions=positions
@@ -102,13 +101,12 @@ class VisionTransformer(nn.Module):
         use_clipped_linears=self.use_clipped_linears,
     )
 
-  @typechecked
   def __call__(
       self,
-      inputs: Float['B L D'],
-      input_mask: Bool['B L'],
-      positions_xy: Int['B L 2'] | None = None,
-  ) -> Float['B L D']:
+      inputs: jax.Array,
+      input_mask: jax.Array,
+      positions_xy: jax.Array | None = None,
+  ) -> jax.Array:
     assert positions_xy is not None
     attn_mask = input_mask[:, :, None] * input_mask[:, None, :]
     outputs = self.stacked_layers(

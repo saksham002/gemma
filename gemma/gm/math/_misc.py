@@ -16,11 +16,10 @@
 
 import itertools
 
-from kauldron.ktyping import Array
 import numpy as np
 
 
-def count_consecutive(values: Array['L']) -> tuple[tuple[int | bool, int], ...]:
+def count_consecutive(values) -> tuple[tuple[int | bool, int], ...]:
   """Counts consecutive identical elements in a list.
 
   Useful to debug masks with padding.

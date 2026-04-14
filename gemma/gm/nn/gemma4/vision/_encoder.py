@@ -23,8 +23,8 @@ from flax import linen as nn
 from gemma.gm.nn.gemma4.vision import _images
 from gemma.gm.nn.gemma4.vision import _layers
 from gemma.gm.nn.gemma4.vision import _transformer
+import jax
 import jax.numpy as jnp
-from kauldron.ktyping import Bool, Float, Int, typechecked  # pylint: disable=g-multiple-import,g-importing-member
 
 BEGIN_IMAGE_TOKEN = 255999
 END_IMAGE_TOKEN = 262144
@@ -91,12 +91,11 @@ class VisionEncoder(nn.Module):
     side = int(self.max_patches**0.5) * self.patch_size
     return side
 
-  @typechecked
   def __call__(
       self,
-      patches: Float['B L P'],
-      positions_xy: Int['B L 2'],
-  ) -> tuple[tuple[Float['B l D'], Bool['B l'] | None], ...]:
+      patches: jax.Array,
+      positions_xy: jax.Array,
+  ) -> tuple[tuple[jax.Array, jax.Array | None], ...]:
     input_mask = jnp.logical_not(
         (positions_xy == POSITIONS_PAD_VALUE).all(axis=-1)
     )

@@ -17,17 +17,15 @@
 import einops
 import jax
 import jax.numpy as jnp
-from kauldron.ktyping import Float, Int, UInt8, typechecked  # pylint: disable=g-multiple-import,g-importing-member
 
 
-@typechecked
 def preprocess_image(
-    image: UInt8['H W C'],
+    image: jax.Array,
     *,
     patch_size: int = 16,
     max_patches: int = 2520,
     pooling_kernel_size: int = 3,
-) -> Float['H2 W2 C']:
+) -> jax.Array:
   """Preprocesses image."""
   # Step 1: Calculate the target dimensions preserving aspect ratio
   height, width, _ = image.shape
@@ -56,10 +54,9 @@ def preprocess_image(
   return image_f
 
 
-@typechecked
 def factorized_posemb(
-    posemb: Float['S 2 D'], positions_xy: Int['B L 2']
-) -> Float['B L D']:
+    posemb: jax.Array, positions_xy: jax.Array
+) -> jax.Array:
   """Compute factorized position embedding from (x, y) coordinates."""
   # One-hot positions_xy to the range [0, posemb.shape[0])
   one_hot = jax.nn.one_hot(positions_xy, posemb.shape[0], dtype=posemb.dtype)
@@ -79,10 +76,9 @@ def factorized_posemb(
   return jnp.sum(pe_seq, axis=0)
 
 
-@typechecked
 def patchify(
-    images: Float['*B H W C'], patch_size: int
-) -> tuple[Float['*B L D'], Int['*B L 2']]:
+    images: jax.Array, patch_size: int
+) -> tuple[jax.Array, jax.Array]:
   """Patchify images and return patches and (x, y) coordinates."""
   patches = einops.rearrange(
       images,

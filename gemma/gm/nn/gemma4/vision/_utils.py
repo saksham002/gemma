@@ -16,16 +16,14 @@
 
 import jax
 import jax.numpy as jnp
-from kauldron.ktyping import Bool, Float, Int, typechecked  # pylint: disable=g-multiple-import,g-importing-member
 
 
-@typechecked
 def avg_pool_by_positions(
-    x: Float['B L D'],
+    x: jax.Array,
     *,
-    positions_xy: Int['B L 2'],
+    positions_xy: jax.Array,
     length: int,
-) -> tuple[Float['B l D'], Bool['B l']]:
+) -> tuple[jax.Array, jax.Array]:
   """2D spatial pooling according to patch positions.
 
   Pools the input tokens by averaging patches within a k×k grid, where
