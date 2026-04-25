@@ -16,16 +16,15 @@
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
-from kauldron.ktyping import Bool, Int, typechecked  # pylint: disable=g-multiple-import,g-importing-member
 
 
-@typechecked
 def make_causal_bidirectional_attention_mask(
-    causal_mask: Bool['B L'],
+    causal_mask: jax.Array,
     *,
-    bidirectional_mask: Bool['B L'] | None = None,
-) -> Bool['B L L']:
+    bidirectional_mask: jax.Array | None = None,
+) -> jax.Array:
   """Make the attention mask for the transformer.
 
   Gemma transformer attention mask is a little complicated, as the text
@@ -69,10 +68,9 @@ def make_causal_bidirectional_attention_mask(
   return attention_mask
 
 
-@typechecked
 def _make_causal_mask(
-    input_mask: Bool['B L'],
-) -> Bool['B L L']:
+    input_mask: jax.Array,
+) -> jax.Array:
   """Makes a causal attention mask.
 
   I.e., as in middle diagram of Figure 3 in https://arxiv.org/pdf/1910.10683.
@@ -95,10 +93,9 @@ def _make_causal_mask(
   return attn_mask
 
 
-@typechecked
 def _make_block_mask_indices(
-    bidirectional_mask: Bool['B L'],
-) -> Int['B L']:
+    bidirectional_mask: jax.Array,
+) -> jax.Array:
   """Creates block mask identifying segments based on a bidirectional mask.
 
   Args:
@@ -114,11 +111,10 @@ def _make_block_mask_indices(
   return bidirectional_mask * numbered_boundary
 
 
-@typechecked
 def _add_bidirectional_mask(
-    attn_mask: Bool['B L L'],
-    bidirectional_mask: Bool['B L'],
-) -> Bool['B L L']:
+    attn_mask: jax.Array,
+    bidirectional_mask: jax.Array,
+) -> jax.Array:
   """Adds bidirectional mask to the attention mask."""
   q_block_indices = _make_block_mask_indices(bidirectional_mask)
   kv_block_indices = q_block_indices

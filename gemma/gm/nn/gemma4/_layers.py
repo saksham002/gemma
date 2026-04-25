@@ -43,7 +43,10 @@ class Einsum(nn.Module):
       if 'w' in w:
         w = w['w']
     if self.w_scale is not None:
-      w *= self.w_scale
+      # In-place `*=` would mutate the underlying param storage when this
+      # module is wrapped via NNX bridge (mutable backing buffer); use a fresh
+      # rebind so the stored parameter is never modified.
+      w = w * self.w_scale
     return jnp.einsum(eqn, x, w)
 
 
@@ -68,7 +71,8 @@ class ClippedEinsum(nn.Module):
       if 'w' in w:
         w = w['w']
     if self.w_scale is not None:
-      w *= self.w_scale
+      # See Einsum.__call__ — avoid in-place mutation of the param buffer.
+      w = w * self.w_scale
 
     inf = float('inf')
     clip_input_min = self.param(
