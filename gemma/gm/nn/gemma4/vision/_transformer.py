@@ -17,6 +17,7 @@
 from flax import linen as nn
 from gemma.gm.nn.gemma4.vision import _modules
 import jax
+from jax import checkpoint_policies as _ckpt_policies
 
 
 class VisionBlock(nn.Module):
@@ -72,8 +73,19 @@ class VisionTransformer(nn.Module):
   use_clipped_linears: bool = False
 
   def setup(self):
-    scan_init_fn = nn.scan(
+    # Wrap each scan iteration in `nn.remat` so per-layer activations are
+    # recomputed during backward instead of being saved to HBM. Without this,
+    # `nn.scan` materialises a stacked `[num_layers, ...]` activation tensor
+    # for all 16 vision layers — a major contributor to peak HBM during the
+    # train-step compile (e.g. f32[16, 2, 4, 225, 12, 64]). The LLM module
+    # already does this around its Block; mirror the same pattern here.
+    block_cls = nn.remat(
         VisionBlock,
+        prevent_cse=False,
+        policy=_ckpt_policies.nothing_saveable,
+    )
+    scan_init_fn = nn.scan(
+        block_cls,
         length=self.num_layers,
         split_rngs={'params': True, 'dropout': True},
         # in_axes=(nn.broadcast, nn.broadcast, nn.broadcast),

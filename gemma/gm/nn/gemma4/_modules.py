@@ -181,7 +181,10 @@ class Embedder(nn.Module):
     )
     x = self.per_layer_model_projection('...td,dnp->...tnp', x)
     x = self.per_layer_projection_norm(x)
-    y = self.per_layer_input_embedding_table[(t,)]
+    # Embedding-table lookup returns the table's stored dtype (f32). Cast to
+    # the projection's activation dtype so the residual stream stays in bf16
+    # rather than being upcast by the f32 embedding.
+    y = self.per_layer_input_embedding_table[(t,)].astype(x.dtype)
     y *= jnp.sqrt(self.per_layer_input_dim).astype(y.dtype)
     return (x + y) * jax.lax.rsqrt(2.0).astype(x.dtype)
 
@@ -645,7 +648,9 @@ class Block(nn.Module):
       outputs += per_layer_inputs_mapped
 
     # 4. Scale
-    outputs = outputs * self.skip_scale
+    # Cast skip_scale (f32 param) to activation dtype so the per-layer carry
+    # stays in bf16 instead of being upcast to f32 by the multiplication.
+    outputs = outputs * self.skip_scale.astype(outputs.dtype)
 
     return cache, outputs, cls_attn_row
 

@@ -164,7 +164,9 @@ class VisionExit(nn.Module):
         x, positions_xy=positions_xy, length=length
     )
 
-    x = x * jnp.sqrt(self.d_model)
+    # Cast scaling factor to x's dtype so the scaling stays in activation
+    # precision (default jnp.sqrt produces f32 and would upcast a bf16 x).
+    x = x * jnp.sqrt(self.d_model).astype(x.dtype)
 
     return x, mask
 

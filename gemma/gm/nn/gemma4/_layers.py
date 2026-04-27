@@ -47,6 +47,9 @@ class Einsum(nn.Module):
       # module is wrapped via NNX bridge (mutable backing buffer); use a fresh
       # rebind so the stored parameter is never modified.
       w = w * self.w_scale
+    # Cast params to input dtype so the einsum runs in the activation dtype
+    # (e.g. bf16) instead of upcasting to f32. Params remain f32 in storage.
+    w = w.astype(x.dtype)
     return jnp.einsum(eqn, x, w)
 
 
@@ -73,6 +76,8 @@ class ClippedEinsum(nn.Module):
     if self.w_scale is not None:
       # See Einsum.__call__ — avoid in-place mutation of the param buffer.
       w = w * self.w_scale
+    # Cast params to input dtype so the einsum runs in activation precision.
+    w = w.astype(x.dtype)
 
     inf = float('inf')
     clip_input_min = self.param(
@@ -88,9 +93,15 @@ class ClippedEinsum(nn.Module):
         'clip_output_max', lambda key, shape, dtype=None: jnp.array(inf), ()
     )
 
-    x = jnp.clip(x, clip_input_min, clip_input_max)
+    # Cast clip bounds to x's dtype so jnp.clip doesn't upcast a bf16 input
+    # to f32 (the inf-initialized scalars default to f32 storage).
+    x = jnp.clip(
+        x, clip_input_min.astype(x.dtype), clip_input_max.astype(x.dtype)
+    )
     x = jnp.einsum(eqn, x, w)
-    x = jnp.clip(x, clip_output_min, clip_output_max)
+    x = jnp.clip(
+        x, clip_output_min.astype(x.dtype), clip_output_max.astype(x.dtype)
+    )
     return x
 
 
@@ -101,11 +112,15 @@ class RMSNorm(nn.Module):
 
   @nn.compact
   def __call__(self, x):
-    var = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
+    # Compute variance in f32 for numerical stability, then cast back to the
+    # input dtype so downstream arithmetic stays in activation precision.
+    dtype = x.dtype
+    x_f32 = x.astype(jnp.float32)
+    var = jnp.mean(jnp.square(x_f32), axis=-1, keepdims=True)
 
     # Jax.lax.rsqrt is used because it returns different floats than
     # jnp.reciprocal(jnp.sqrt(var + 1e-06))
-    normed_inputs = x * jax.lax.rsqrt(var + 1e-06)
+    normed_inputs = x_f32 * jax.lax.rsqrt(var + 1e-06)
 
     if self.with_scale:
       scale = self.param(
@@ -118,4 +133,4 @@ class RMSNorm(nn.Module):
       # a (1, ..., 1, D) tensor, so the rank of scale matches normed_inputs.
       scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1))
       normed_inputs = normed_inputs * scale
-    return normed_inputs
+    return normed_inputs.astype(dtype)

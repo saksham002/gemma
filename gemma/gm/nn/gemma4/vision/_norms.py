@@ -24,16 +24,21 @@ class RMSNorm(nn.Module):
 
   @nn.compact
   def __call__(self, x):
+    # Compute variance in f32 for numerical stability; cast back to the input
+    # dtype so downstream arithmetic stays in activation precision (bf16 vs
+    # f32 params would otherwise upcast the output to f32).
+    dtype = x.dtype
     scale = self.param('scale', nn.initializers.zeros_init(), (x.shape[-1]))
-    var = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
+    x_f32 = x.astype(jnp.float32)
+    var = jnp.mean(jnp.square(x_f32), axis=-1, keepdims=True)
 
     # Jax.lax.rsqrt is used because it returns different floats than
     # jnp.reciprocal(jnp.sqrt(var + 1e-06))
-    normed_inputs = x * jax.lax.rsqrt(var + 1e-06)
+    normed_inputs = x_f32 * jax.lax.rsqrt(var + 1e-06)
 
     # normed_inputs is a rank-K tensor, K > 1 (K is typically 2 or 3). scale is
     # a rank-1 tensor. To avoid implicit rank-promotion, reshape scale to
     # a (1, ..., 1, D) tensor, so the rank of scale matches normed_inputs.
     scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1))
     normed_inputs = normed_inputs * scale
-    return normed_inputs
+    return normed_inputs.astype(dtype)
