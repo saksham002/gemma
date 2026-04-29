@@ -50,7 +50,8 @@ class Einsum(nn.Module):
     # Cast params to input dtype so the einsum runs in the activation dtype
     # (e.g. bf16) instead of upcasting to f32. Params remain f32 in storage.
     w = w.astype(x.dtype)
-    return jnp.einsum(eqn, x, w)
+    # Force output dtype: TPU's bf16 matmul accumulates in f32 and may return f32.
+    return jnp.einsum(eqn, x, w).astype(x.dtype)
 
 
 class ClippedEinsum(nn.Module):
@@ -95,10 +96,12 @@ class ClippedEinsum(nn.Module):
 
     # Cast clip bounds to x's dtype so jnp.clip doesn't upcast a bf16 input
     # to f32 (the inf-initialized scalars default to f32 storage).
+    in_dtype = x.dtype
     x = jnp.clip(
         x, clip_input_min.astype(x.dtype), clip_input_max.astype(x.dtype)
     )
-    x = jnp.einsum(eqn, x, w)
+    # Force output dtype: TPU's bf16 matmul accumulates in f32 and may return f32.
+    x = jnp.einsum(eqn, x, w).astype(in_dtype)
     x = jnp.clip(
         x, clip_output_min.astype(x.dtype), clip_output_max.astype(x.dtype)
     )

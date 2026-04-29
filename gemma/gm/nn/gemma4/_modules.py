@@ -251,6 +251,7 @@ class Attention(nn.Module):
       cls_attn_row: Attention probs for the last (CLS) query position,
         averaged over heads. Shape [batch_size, cache_size].
     """
+    in_dtype = x.dtype
     query_proj = self.q_einsum('BTD,NDH->BTNH', x)
     query_proj = self.query_norm(query_proj)
     query_proj = _positional_embeddings.apply_rope(
@@ -261,27 +262,34 @@ class Attention(nn.Module):
         rope_proportion=self.rope_proportion,
     )
 
-    # TODO(imayank): move the key_proj and value_proj to kv_shared_cache=None
-    # case after checkpoints remove the kv_einsum from the shared layers.
-    if self.k_eq_v:
-      output = self.k_einsum('BSD,KDH->BSKH', x)
-      key_proj, value_proj = output, output
-    else:
-      key_proj, value_proj = self.kv_einsum('BSD,CKDH->CBSKH', x)
-    key_proj = self.key_norm(key_proj)
-    value_proj = self.value_norm(value_proj)
+    # H4 fix: when kv_shared_cache is provided, the upstream layer's K/V will
+    # overwrite anything we'd compute here, so at runtime we skip kv_einsum +
+    # key/value norms entirely. We still need to RUN them during param init so
+    # shared-layer checkpoints retain the same param structure (we just throw
+    # the result away at init time).
+    in_init = self.is_mutable_collection('params')
+    compute_kv = kv_shared_cache is None or in_init
+    if compute_kv:
+      if self.k_eq_v:
+        output = self.k_einsum('BSD,KDH->BSKH', x)
+        local_k, local_v = output, output
+      else:
+        local_k, local_v = self.kv_einsum('BSD,CKDH->CBSKH', x)
+      local_k = self.key_norm(local_k)
+      local_v = self.value_norm(local_v)
 
     if kv_shared_cache is not None:
       key_proj = kv_shared_cache['k']
       value_proj = kv_shared_cache['v']
     else:
       key_proj = _positional_embeddings.apply_rope(
-          key_proj,
+          local_k,
           segment_pos,
           base_frequency=self.rope_base_frequency,
           scale_factor=self.rope_scale_factor,
           rope_proportion=self.rope_proportion,
       )
+      value_proj = local_v
 
     # Cache is left aligned.
     # Save the KV values to the cache.
@@ -360,9 +368,12 @@ class Attention(nn.Module):
     else:
       # [batch_size, seq_len, num_heads, key_size]
       encoded = jnp.einsum('BTNS,BSNH->BTNH', probs, value_proj)
+    # Force output dtype: GPU/TPU einsum can return f32 from bf16 inputs.
+    encoded = encoded.astype(in_dtype)
 
     # [batch_size, seq_len, features]
     attn_output = self.attn_vec_einsum('BTNH,NHD->BTD', encoded)
+    attn_output = attn_output.astype(in_dtype)
 
     # Always cache the layer-sharing KV.
     # This also includes the context KV if cache is not None.
@@ -606,8 +617,17 @@ class Block(nn.Module):
       cls_attn_row: CLS attention row from the attention sub-module. Shape
         [batch_size, cache_size].
     """
+    # Lazy-import openpi's mesh-aware FSDP sharding hint: a top-level import
+    # would cycle (openpi imports this fork during its own startup). Mirrors
+    # the 6-spot pattern in src/openpi/models/gemma3.py:300-335.
+    from openpi.training.sharding import activation_sharding_constraint as _shard
+
+    dtype = x.dtype  # original dtype, could be half-precision
+    x = _shard(x)  # block entry
     # 1. Attention
     inputs_normalized = self.pre_attention_norm(x)
+    inputs_normalized = _shard(inputs_normalized)  # before attn
+    assert inputs_normalized.dtype == dtype, f"pre_attn_norm: {dtype}->{inputs_normalized.dtype}"
 
     cache, attn_output, cls_attn_row = self.attn(
         inputs_normalized,
@@ -616,19 +636,27 @@ class Block(nn.Module):
         attn_mask,
         kv_shared_cache,
     )
+    attn_output = _shard(attn_output)  # after attn
+    assert attn_output.dtype == dtype, f"attn: {dtype}->{attn_output.dtype}"
 
     if self.post_attention_norm is not None:
       attn_output = self.post_attention_norm(attn_output)
+      assert attn_output.dtype == dtype, f"post_attn_norm: {dtype}->{attn_output.dtype}"
 
     attn_output += x
+    attn_output = _shard(attn_output)  # after attn residual
+    assert attn_output.dtype == dtype, f"attn_residual: {dtype}->{attn_output.dtype}"
 
     # 2. Feed-forward
     if self.enable_moe:
       outputs = self._forward_moe(attn_output)
     else:
       outputs = self._forward_dense(attn_output)
+    outputs = _shard(outputs)  # after ffw
+    assert outputs.dtype == dtype, f"ffw: {dtype}->{outputs.dtype}"
 
     outputs += attn_output
+    assert outputs.dtype == dtype, f"ffw_residual: {dtype}->{outputs.dtype}"
 
     # 3. Per-layer input
     if self.per_layer_input_dim:
@@ -636,8 +664,10 @@ class Block(nn.Module):
       per_layer_inputs_mapped = self.per_layer_input_gate(
           '...D,DP->...P', gating_input
       )
+      # Cast caller-supplied per_layer_input to activation dtype to keep the
+      # carry stable (the caller may hand us f32, e.g. from random init).
       per_layer_inputs_mapped = (
-          nn.gelu(per_layer_inputs_mapped) * per_layer_input
+          nn.gelu(per_layer_inputs_mapped) * per_layer_input.astype(dtype)
       )
       per_layer_inputs_mapped = self.per_layer_projection(
           '...P,PD->...D', per_layer_inputs_mapped
@@ -646,11 +676,14 @@ class Block(nn.Module):
           per_layer_inputs_mapped
       )
       outputs += per_layer_inputs_mapped
+      assert outputs.dtype == dtype, f"pli_residual: {dtype}->{outputs.dtype}"
 
     # 4. Scale
     # Cast skip_scale (f32 param) to activation dtype so the per-layer carry
     # stays in bf16 instead of being upcast to f32 by the multiplication.
     outputs = outputs * self.skip_scale.astype(outputs.dtype)
+    outputs = _shard(outputs)  # before return
+    assert outputs.dtype == dtype
 
     return cache, outputs, cls_attn_row
 

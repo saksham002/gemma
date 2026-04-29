@@ -321,6 +321,12 @@ class Block(nn.Module):
     Returns:
       outputs: Output sequence of shape [batch_size, seq_len, embed_dim].
     """
+    # Lazy-import openpi's mesh-aware FSDP sharding hint to avoid a top-level
+    # circular import (openpi imports this fork during its own startup).
+    # 4-spot pattern mirrors src/openpi/models/siglip.py Encoder1DBlock.
+    from openpi.training.sharding import activation_sharding_constraint as _shard
+
+    inputs = _shard(inputs)  # 1: block entry
     normed_inputs = self.pre_attention_norm(inputs)
     attn_output = self.attn(
         x=normed_inputs,
@@ -328,9 +334,12 @@ class Block(nn.Module):
         attn_mask=attn_mask,
     )
     attn_output = self.post_attention_norm(attn_output)
+    attn_output = _shard(attn_output)  # 2: after attn (before residual)
     attn_output += inputs
     outputs = self.pre_ffw_norm(attn_output)
     outputs = self.mlp(outputs)
     outputs = self.post_ffw_norm(outputs)
+    outputs = _shard(outputs)  # 3: after ffw (before residual)
     outputs += attn_output
+    outputs = _shard(outputs)  # 4: before return
     return outputs
